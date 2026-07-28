@@ -1,0 +1,94 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Read-only role assumed by the AWS Ops Agent (deployed in the central ops account)
+  to collect CloudWatch/Cost/Health/Compute-Optimizer signals from this account.
+  Deploy via StackSets across every spoke account/region you want monitored.
+
+Parameters:
+  OpsAccountId:
+    Type: String
+    Description: Account ID of the central ops account running the agent Lambda
+
+Resources:
+  AwsOpsAgentReadOnlyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: AwsOpsAgentReadOnly
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${OpsAccountId}:root"
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: "aws-ops-agent"
+      Policies:
+        - PolicyName: AwsOpsAgentReadOnlyPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: CloudWatchRead
+                Effect: Allow
+                Action:
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:GetMetricData
+                  - cloudwatch:ListMetrics
+                Resource: "*"
+              - Sid: TagReadForTierClassification
+                Effect: Allow
+                Action:
+                  - ec2:DescribeTags
+                  - rds:ListTagsForResource
+                Resource: "*"
+              - Sid: CostExplorerRead
+                Effect: Allow
+                Action:
+                  - ce:GetAnomalies
+                  - ce:GetCostAndUsage
+                  - ce:GetAnomalyMonitors
+                Resource: "*"
+              - Sid: ComputeOptimizerRead
+                Effect: Allow
+                Action:
+                  - compute-optimizer:GetEC2InstanceRecommendations
+                  - compute-optimizer:GetRDSDatabaseRecommendations
+                  - compute-optimizer:GetEBSVolumeRecommendations
+                Resource: "*"
+              - Sid: HealthRead
+                Effect: Allow
+                Action:
+                  - health:DescribeEvents
+                  - health:DescribeEventDetails
+                  - health:DescribeAffectedEntities
+                Resource: "*"
+              - Sid: TrustedAdvisorRead
+                Effect: Allow
+                Action:
+                  - support:DescribeTrustedAdvisorChecks
+                  - support:DescribeTrustedAdvisorCheckResult
+                Resource: "*"
+              - Sid: ServiceInventoryRead
+                Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - rds:DescribeDBInstances
+                  - s3:ListAllMyBuckets
+                  - ses:GetAccount
+                  - cloudfront:ListDistributions
+                  - transfer:ListServers
+                  - cognito-idp:ListUserPools
+                  - cognito-idp:DescribeUserPool
+                  - secretsmanager:ListSecrets
+                  - acm:ListCertificates
+                  - acm:DescribeCertificate
+                  - sns:ListTopics
+                  - sns:GetTopicAttributes
+                  - route53:ListHostedZones
+                  - iam:GetAccountSummary
+                Resource: "*"
+
+Outputs:
+  RoleArn:
+    Value: !GetAtt AwsOpsAgentReadOnlyRole.Arn

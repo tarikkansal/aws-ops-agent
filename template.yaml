@@ -1,0 +1,333 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  AWS Ops Agent - an autonomous AWS monitoring and operations assistant.
+  Summarizes account health in plain English, posts to Slack on a schedule,
+  auto-executes whitelisted low-risk actions, and requires approval for
+  anything higher-risk. Nothing in this template is organization-specific -
+  every value below is provided at deploy time.
+
+Parameters:
+  SpokeRoleArns:
+    Type: CommaDelimitedList
+    Description: Comma-separated list of AwsOpsAgentReadOnly role ARNs, one per AWS account to monitor
+  NotificationChannels:
+    Type: CommaDelimitedList
+    Default: "slack"
+    Description: Which channels to notify - "slack", "teams", or both comma-separated
+  SlackWebhookSecretArn:
+    Type: String
+    Default: ""
+    Description: Secrets Manager ARN holding the Slack incoming webhook URL (required if "slack" is in NotificationChannels)
+  SlackSigningSecretArn:
+    Type: String
+    Description: Secrets Manager ARN holding the Slack app's signing secret. Always required - used for /aws-ops commands and to sign Teams approval links, even if your digest posts to Teams only.
+  TeamsWebhookSecretArn:
+    Type: String
+    Default: ""
+    Description: Secrets Manager ARN holding the Teams Power Automate Workflow webhook URL (required if "teams" is in NotificationChannels)
+  ExecutorRoleArn:
+    Type: String
+    Description: ARN of the AwsOpsAgentExecutor role
+  AllowedSlackUserIds:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: Slack user IDs (e.g. U0123ABC456) allowed to run /aws-ops commands
+  BedrockModelId:
+    Type: String
+    Default: us.anthropic.claude-haiku-4-5-20251001-v1:0
+    Description: Bedrock model ID or inference profile ID to use for the digest
+  CompanyName:
+    Type: String
+    Default: ""
+    Description: Optional - shown in the Slack message header (e.g. "Acme Inc")
+  ExpectedBucketPrefix:
+    Type: String
+    Default: ""
+    Description: Optional - S3 buckets not starting with this prefix get flagged. Leave blank to skip the check.
+  BillingAlarmNameFilter:
+    Type: String
+    Default: ""
+    Description: Optional - CloudWatch alarm name/prefix to check for in the billing-alerts row. Leave blank to skip.
+  BillingSnsTopicNameFilter:
+    Type: String
+    Default: ""
+    Description: Optional - SNS topic name/prefix to check for in the billing-alerts row. Leave blank to skip.
+  ScheduleExpression:
+    Type: String
+    Default: "rate(3 hours)"
+    Description: EventBridge schedule expression for the frequent/lightweight check (e.g. "rate(3 hours)" or "cron(0 0,3,6,9,12,15,18,21 * * ? *)")
+  DailyScheduleExpression:
+    Type: String
+    Default: "cron(0 8 * * ? *)"
+    Description: EventBridge cron expression for the daily full digest
+  ScheduleTimezone:
+    Type: String
+    Default: "UTC"
+    Description: IANA timezone for both schedules (e.g. "America/New_York", "Europe/London")
+
+Conditions:
+  HasSlackWebhook: !Not [!Equals [!Ref SlackWebhookSecretArn, ""]]
+  HasTeamsWebhook: !Not [!Equals [!Ref TeamsWebhookSecretArn, ""]]
+
+Resources:
+  ActionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: aws-ops-agent-actions
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: action_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: action_id
+          KeyType: HASH
+
+  ExecutorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: aws-ops-agent-executor
+      CodeUri: src/
+      Handler: executor.handler
+      Runtime: python3.12
+      Timeout: 60
+      MemorySize: 256
+      Environment:
+        Variables:
+          EXECUTOR_ROLE_ARN: !Ref ExecutorRoleArn
+          ACTIONS_TABLE_NAME: !Ref ActionsTable
+      Policies:
+        - Statement:
+            - Sid: AssumeExecutorRole
+              Effect: Allow
+              Action: sts:AssumeRole
+              Resource: !Ref ExecutorRoleArn
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ActionsTable
+
+  DigestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: aws-ops-agent-digest
+      CodeUri: src/
+      Handler: digest.handler
+      Runtime: python3.12
+      Timeout: 300
+      MemorySize: 512
+      Environment:
+        Variables:
+          SPOKE_ROLE_ARNS: !Join [",", !Ref SpokeRoleArns]
+          NOTIFICATION_CHANNELS: !Join [",", !Ref NotificationChannels]
+          SLACK_WEBHOOK_SECRET_ARN: !Ref SlackWebhookSecretArn
+          SLACK_SIGNING_SECRET_ARN: !Ref SlackSigningSecretArn
+          TEAMS_WEBHOOK_SECRET_ARN: !Ref TeamsWebhookSecretArn
+          TEAMS_ACTIONS_URL: !Sub "https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com/teams/action"
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          ACTIONS_TABLE_NAME: !Ref ActionsTable
+          EXECUTOR_FUNCTION_NAME: !Ref ExecutorFunction
+          COMPANY_NAME: !Ref CompanyName
+          EXPECTED_BUCKET_PREFIX: !Ref ExpectedBucketPrefix
+          BILLING_ALARM_NAME_FILTER: !Ref BillingAlarmNameFilter
+          BILLING_SNS_TOPIC_NAME_FILTER: !Ref BillingSnsTopicNameFilter
+      Policies:
+        - Statement:
+            - Sid: AssumeSpokeRoles
+              Effect: Allow
+              Action: sts:AssumeRole
+              Resource: !Ref SpokeRoleArns
+            - Sid: ReadSlackSigningSecret
+              Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref SlackSigningSecretArn
+            - !If
+              - HasSlackWebhook
+              - Sid: ReadSlackWebhookSecret
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref SlackWebhookSecretArn
+              - !Ref "AWS::NoValue"
+            - !If
+              - HasTeamsWebhook
+              - Sid: ReadTeamsWebhookSecret
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref TeamsWebhookSecretArn
+              - !Ref "AWS::NoValue"
+            - Sid: InvokeBedrock
+              Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                - !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${BedrockModelId}"
+                - !Sub "arn:aws:bedrock:*::foundation-model/*"
+            - Sid: InvokeExecutor
+              Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !GetAtt ExecutorFunction.Arn
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ActionsTable
+
+  InteractionsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: aws-ops-agent-slack-interactions
+      CodeUri: src/
+      Handler: slack_interactions.handler
+      Runtime: python3.12
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          SLACK_SIGNING_SECRET_ARN: !Ref SlackSigningSecretArn
+          ACTIONS_TABLE_NAME: !Ref ActionsTable
+          EXECUTOR_FUNCTION_NAME: !Ref ExecutorFunction
+          ALLOWED_SLACK_USER_IDS: !Join [",", !Ref AllowedSlackUserIds]
+      Policies:
+        - Statement:
+            - Sid: ReadSlackSigningSecret
+              Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref SlackSigningSecretArn
+            - Sid: InvokeExecutor
+              Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !GetAtt ExecutorFunction.Arn
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ActionsTable
+      Events:
+        SlackInteraction:
+          Type: HttpApi
+          Properties:
+            Path: /slack/interactions
+            Method: post
+
+  CommandsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: aws-ops-agent-slack-commands
+      CodeUri: src/
+      Handler: slack_commands.handler
+      Runtime: python3.12
+      Timeout: 15
+      MemorySize: 256
+      Environment:
+        Variables:
+          SLACK_SIGNING_SECRET_ARN: !Ref SlackSigningSecretArn
+          ACTIONS_TABLE_NAME: !Ref ActionsTable
+          ALLOWED_SLACK_USER_IDS: !Join [",", !Ref AllowedSlackUserIds]
+      Policies:
+        - Statement:
+            - Sid: ReadSlackSigningSecret
+              Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref SlackSigningSecretArn
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ActionsTable
+      Events:
+        SlackCommand:
+          Type: HttpApi
+          Properties:
+            Path: /slack/command
+            Method: post
+
+  TeamsActionsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: aws-ops-agent-teams-actions
+      CodeUri: src/
+      Handler: teams_actions.handler
+      Runtime: python3.12
+      Timeout: 15
+      MemorySize: 256
+      Environment:
+        Variables:
+          SLACK_SIGNING_SECRET_ARN: !Ref SlackSigningSecretArn
+          ACTIONS_TABLE_NAME: !Ref ActionsTable
+          EXECUTOR_FUNCTION_NAME: !Ref ExecutorFunction
+      Policies:
+        - Statement:
+            - Sid: ReadSigningSecretForLinkVerification
+              Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref SlackSigningSecretArn
+            - Sid: InvokeExecutor
+              Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !GetAtt ExecutorFunction.Arn
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ActionsTable
+      Events:
+        TeamsAction:
+          Type: HttpApi
+          Properties:
+            Path: /teams/action
+            Method: get
+
+  ScheduleRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: scheduler.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeDigestFunction
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt DigestFunction.Arn
+
+  FrequentSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: aws-ops-agent-frequent
+      ScheduleExpression: !Ref ScheduleExpression
+      ScheduleExpressionTimezone: !Ref ScheduleTimezone
+      FlexibleTimeWindow: { Mode: "OFF" }
+      Target:
+        Arn: !GetAtt DigestFunction.Arn
+        RoleArn: !GetAtt ScheduleRole.Arn
+        Input: '{"mode": "hourly"}'
+
+  DailySchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: aws-ops-agent-daily
+      ScheduleExpression: !Ref DailyScheduleExpression
+      ScheduleExpressionTimezone: !Ref ScheduleTimezone
+      FlexibleTimeWindow: { Mode: "OFF" }
+      Target:
+        Arn: !GetAtt DigestFunction.Arn
+        RoleArn: !GetAtt ScheduleRole.Arn
+        Input: '{"mode": "daily"}'
+
+  DigestFunctionInvokePermissionFrequent:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DigestFunction
+      Action: lambda:InvokeFunction
+      Principal: scheduler.amazonaws.com
+      SourceArn: !GetAtt FrequentSchedule.Arn
+
+  DigestFunctionInvokePermissionDaily:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DigestFunction
+      Action: lambda:InvokeFunction
+      Principal: scheduler.amazonaws.com
+      SourceArn: !GetAtt DailySchedule.Arn
+
+Outputs:
+  DigestFunctionArn:
+    Value: !GetAtt DigestFunction.Arn
+  ExecutorFunctionArn:
+    Value: !GetAtt ExecutorFunction.Arn
+  SlackInteractionsUrl:
+    Description: Set this as the Slack app's Interactivity Request URL
+    Value: !Sub "https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com/slack/interactions"
+  SlackCommandUrl:
+    Description: Set this as the /aws-ops slash command's Request URL
+    Value: !Sub "https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com/slack/command"

@@ -1,0 +1,80 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Write-scoped role assumed by the AWS Ops Agent's executor Lambda.
+  Deliberately narrow: only the specific actions in the Tier 1 / Tier 2
+  taxonomy, nothing else. No iam:*, no kms:*PolicyChange, no Organizations,
+  no VPC network ACL/route table writes - those stay human-only by design.
+
+Parameters:
+  OpsAccountId:
+    Type: String
+    Description: Account ID of the central ops account running the executor Lambda
+
+Resources:
+  AwsOpsAgentExecutorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: AwsOpsAgentExecutor
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${OpsAccountId}:root"
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: "aws-ops-agent-executor"
+      Policies:
+        - PolicyName: AwsOpsAgentExecutorPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # --- RDS: start/stop and snapshot only. No delete, no ModifyDBInstance. ---
+              - Sid: RdsStartStopSnapshot
+                Effect: Allow
+                Action:
+                  - rds:StartDBInstance
+                  - rds:StopDBInstance
+                  - rds:CreateDBSnapshot
+                  - rds:DescribeDBInstances
+                Resource: "*"
+
+              # --- EC2: start/stop/terminate + read. No SecurityGroup writes, no IAM instance profile changes. ---
+              - Sid: Ec2StartStopTerminate
+                Effect: Allow
+                Action:
+                  - ec2:StartInstances
+                  - ec2:StopInstances
+                  - ec2:TerminateInstances
+                  - ec2:DescribeInstances
+                  - ec2:DescribeTags
+                Resource: "*"
+
+              # --- S3: lifecycle policy and versioning/public-access tightening only. No DeleteBucket, no PutBucketPolicy. ---
+              - Sid: S3LifecycleAndHardening
+                Effect: Allow
+                Action:
+                  - s3:PutLifecycleConfiguration
+                  - s3:PutBucketVersioning
+                  - s3:PutBucketPublicAccessBlock
+                  - s3:GetBucketTagging
+                  - s3:GetBucketVersioning
+                Resource: "*"
+
+              # --- CloudFront: cache invalidation only. ---
+              - Sid: CloudFrontInvalidate
+                Effect: Allow
+                Action:
+                  - cloudfront:CreateInvalidation
+                  - cloudfront:GetDistribution
+                Resource: "*"
+
+              # Explicitly nothing else. iam:*, kms:PutKeyPolicy, organizations:*,
+              # ec2:*SecurityGroup*, ec2:*NetworkAcl*, ec2:*RouteTable*, and any
+              # *Policy/*Permission actions are intentionally absent - those stay
+              # in Tier 3 (draft-only, human executes manually).
+
+Outputs:
+  ExecutorRoleArn:
+    Value: !GetAtt AwsOpsAgentExecutorRole.Arn

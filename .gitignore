@@ -1,0 +1,8 @@
+.DS_Store
+.aws-sam/
+out*.json
+__pycache__/
+*.pyc
+.env
+samconfig.toml
+.claude/
