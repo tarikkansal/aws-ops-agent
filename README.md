@@ -47,6 +47,17 @@ See [`src/actions.py`](src/actions.py) for the exact, complete whitelist of ever
 is capable of doing. If an action type isn't in that file, the agent cannot do it — there's no
 fallback to a general-purpose AWS API call.
 
+**Important: watching and acting are two separate systems.** The digest table shows *every*
+service costing you money — including ones with no dedicated collector, auto-detected purely
+from billing data (see "What it actually does" above). That's visibility. It does **not** mean
+the agent can act on them. Only EC2 (start/stop), RDS (start/stop), S3 (lifecycle policies), and
+CloudFront (cache invalidation) are ever actionable — everything else in the table, no matter how
+it got there, is report-only. If you see an ECS service, a Lambda function, or an Elastic Load
+Balancer in the table and it's running unexpectedly, the agent can tell you about it but cannot
+stop it — you'd need to do that yourself, or explicitly extend `actions.py` to add that
+capability (a deliberate whitelist addition, not something that happens automatically just
+because the service became visible).
+
 ## Quickstart
 
 ```bash
@@ -109,16 +120,21 @@ registration.
 
 ## Manual commands
 
-Once deployed, anyone on the allowlist can type things like:
+Once deployed, anyone on the allowlist can type in Slack:
 
 ```
-/aws-ops stop-ec2 i-0123456789
-/aws-ops start-rds mydb-instance
-/aws-ops invalidate-cdn E1234ABCD /images/*
+/aws-ops digest                              — pull a full check-in right now, don't wait for the schedule
+/aws-ops status                              — same as digest
+/aws-ops start-rds <instance-id>
+/aws-ops stop-rds <instance-id>
+/aws-ops start-ec2 <instance-id>
+/aws-ops stop-ec2 <instance-id>
+/aws-ops invalidate-cdn <distribution-id> <path1,path2,...>
 ```
 
-Each posts a 60-second confirm button before doing anything — catches typos before they become
-outages.
+That's the complete list — same whitelist as the automated tiers, nothing broader. Every
+start/stop/invalidate command posts a 60-second confirm button before doing anything — catches
+typos before they become outages.
 
 ## Cost to run
 

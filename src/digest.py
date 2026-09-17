@@ -193,7 +193,11 @@ def collect_account(role_arn, mode):
             "sending_enabled": account.get("SendingEnabled"),
             "max_send_rate": account.get("SendQuota", {}).get("MaxSendRate"),
             "sent_last_24h": account.get("SendQuota", {}).get("SentLast24Hours"),
-            "production_access": not account.get("Details", {}).get("SuppressionAttributes") is None,
+            # Real AWS field for sandbox vs production - False means sandbox
+            # (verified emails only, 200/day cap). The previous check here
+            # looked at SuppressionAttributes presence, which is unrelated
+            # and meant this was never actually detecting sandbox status.
+            "production_access_enabled": account.get("ProductionAccessEnabled"),
         }
     except Exception as e:
         out["errors"].append(f"ses_inventory: {e}")
@@ -503,8 +507,9 @@ def ask_claude_for_digest(collected, mode):
         "should say storage costs continue even while stopped (compute cost stops, storage cost "
         "doesn't) - do not treat this as a problem.\n"
         f"  - \"File storage (S3)\": status is 'Active'; name the actual bucket names. {bucket_rule}\n"
-        "  - \"Email sending (SES)\": status is 'Sending' or 'Sandbox' or 'Disabled'; mention volume "
-        "in the note.\n"
+        "  - \"Email sending (SES)\": status is 'Sandbox' if ses_inventory.production_access_enabled is "
+        "false, 'Sending' if true and sending_enabled is true, 'Disabled' if sending_enabled is false. "
+        "Never guess this - use the actual production_access_enabled value. Mention volume in the note.\n"
         "  - \"Content delivery (CDN)\": status is 'Active' or 'Deployed'; name the actual CloudFront "
         "domain name(s).\n"
         "  - \"User auth (Cognito)\": status is 'Active'; name the user pool and estimated user "
