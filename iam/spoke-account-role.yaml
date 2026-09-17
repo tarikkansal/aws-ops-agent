@@ -87,6 +87,13 @@ Resources:
                   - sns:GetTopicAttributes
                   - route53:ListHostedZones
                   - iam:GetAccountSummary
+                  - apprunner:ListServices
+                  - apprunner:DescribeService
+                  - ecs:ListClusters
+                  - ecs:DescribeClusters
+                  - ecs:ListServices
+                  - ecs:DescribeServices
+                  - lambda:ListFunctions
                 Resource: "*"
 
 Outputs:

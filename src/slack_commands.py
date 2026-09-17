@@ -26,11 +26,13 @@ from actions import validate_action
 
 SLACK_SIGNING_SECRET_ARN = os.environ["SLACK_SIGNING_SECRET_ARN"]
 ACTIONS_TABLE_NAME = os.environ["ACTIONS_TABLE_NAME"]
+DIGEST_FUNCTION_NAME = os.environ.get("DIGEST_FUNCTION_NAME", "aws-ops-agent-digest")
 ALLOWED_SLACK_USER_IDS = {u.strip() for u in os.environ.get("ALLOWED_SLACK_USER_IDS", "").split(",") if u.strip()}
 CONFIRM_WINDOW_SECONDS = 60
 
 secrets = boto3.client("secretsmanager")
 dynamodb = boto3.resource("dynamodb", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+lambda_client = boto3.client("lambda", region_name=os.environ.get("AWS_REGION", "us-east-1"))
 table = dynamodb.Table(ACTIONS_TABLE_NAME)
 
 _signing_secret_cache = None
@@ -70,19 +72,49 @@ COMMAND_MAP = {
 
 HELP_TEXT = (
     "Usage: `/awsmanager <command> <args>`\n"
-    "Commands: `start-rds <id>`, `stop-rds <id>`, `start-ec2 <id>`, `stop-ec2 <id>`, "
+    "Status: `digest` or `status` — pull a full AWS check-in into Slack now\n"
+    "Actions: `start-rds <id>`, `stop-rds <id>`, `start-ec2 <id>`, `stop-ec2 <id>`, "
     "`invalidate-cdn <distribution_id> <comma,separated,paths>`\n"
     "IAM, KMS, VPC, and account/org settings are never available here - those stay manual by design."
 )
 
 
+def trigger_digest(response_url, user_name):
+    """Kick off a full daily-mode digest asynchronously. Slack needs a response
+    within 3s; the digest Lambda posts the table to the webhook when done."""
+    try:
+        lambda_client.invoke(
+            FunctionName=DIGEST_FUNCTION_NAME,
+            InvocationType="Event",  # async - don't wait for Bedrock
+            Payload=json.dumps({"mode": "daily", "triggered_by": f"slack:@{user_name}"}).encode("utf-8"),
+        )
+        text = (
+            f"Pulling a fresh AWS check-in now (requested by @{user_name}). "
+            "The full table will post here in about 30–60 seconds."
+        )
+    except Exception as e:
+        text = f"Couldn't start the digest: {e}"
+
+    payload = {"response_type": "in_channel", "text": text}
+    req = urllib.request.Request(
+        response_url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    urllib.request.urlopen(req, timeout=10)
+
+
 def parse_command_text(text):
-    """Returns (action_type, params, resource_label) or (None, None, error_message)."""
+    """Returns (action_type, params, resource_label) or (None, None, error_message).
+    Special case: action_type == '__digest__' means trigger a status report."""
     parts = text.strip().split()
     if not parts:
         return None, None, HELP_TEXT
 
-    cmd, args = parts[0], parts[1:]
+    cmd, args = parts[0].lower(), parts[1:]
+    if cmd in {"digest", "status", "check", "report"}:
+        return "__digest__", {}, "digest"
+
     if cmd not in COMMAND_MAP:
         return None, None, f"Unknown command `{cmd}`.\n{HELP_TEXT}"
 
@@ -150,6 +182,10 @@ def handler(event, context):
             "headers": {"Content-Type": "application/json"},
             "body": json.dumps({"response_type": "ephemeral", "text": error_or_label}),
         }
+
+    if action_type == "__digest__":
+        trigger_digest(response_url, user_name)
+        return {"statusCode": 200, "headers": {"Content-Type": "application/json"}, "body": ""}
 
     ok, err = validate_action(action_type, params)
     if not ok:

@@ -135,11 +135,19 @@ def handler(event, context):
         Payload=json.dumps(invoke_payload).encode("utf-8"),
     )
     result = json.loads(resp["Payload"].read())
-    ok = resp.get("StatusCode") == 200 and not result.get("errorMessage")
+    # resp["StatusCode"] is the Lambda INVOCATION status - it's 200 as long as
+    # the function ran at all, even if the function's own logic returned a
+    # failure. The real outcome is inside result["statusCode"], which is what
+    # executor.py's handler actually returns (200 on success, 400/403/500 on
+    # refusal or failure). Checking the wrong one is what caused this to
+    # report "executed" for an AWS call that actually failed.
+    ok = resp.get("StatusCode") == 200 and not result.get("errorMessage") and result.get("statusCode") == 200
+    result_body = json.loads(result.get("body", "{}")) if isinstance(result.get("body"), str) else result.get("body", {})
 
     if ok:
         update_slack_message(response_url, f"Approved by @{user} and executed: {item.get('action_type')} on {item.get('resource')}")
     else:
-        update_slack_message(response_url, f"Approved by @{user} but execution failed: {result}")
+        error_detail = result_body.get("error", result.get("errorMessage", "unknown error"))
+        update_slack_message(response_url, f"Approved by @{user} but execution FAILED: {item.get('action_type')} on {item.get('resource')} - {error_detail}")
 
     return {"statusCode": 200, "body": ""}

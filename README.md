@@ -122,9 +122,24 @@ outages.
 
 ## Cost to run
 
-Roughly a few dollars a month for a small account: Lambda invocations, DynamoDB on-demand,
-Bedrock (Claude Haiku is cheap per call), and CloudWatch Logs. No fixed infrastructure cost —
-everything is serverless and scales to zero between runs.
+**Bedrock is the main line item.** Claude Haiku 4.5 on Bedrock runs roughly $1 per million input
+tokens and $5 per million output tokens (check [current pricing](https://aws.amazon.com/bedrock/pricing/)
+since this changes). Each digest run sends ~3,000-4,000 tokens of input (the prompt plus all the
+collected AWS data) and generates ~1,000-1,500 tokens of output — about **$0.01 per run**.
+
+At the default cadence (checks every 3 hours + one daily digest, ~9 runs/day):
+
+```
+9 runs/day × 30 days × ~$0.01/run ≈ $2-3/month
+```
+
+Everything else — Lambda invocations, DynamoDB on-demand, CloudWatch Logs — adds up to well
+under a dollar a month at this scale. No fixed infrastructure cost; everything is serverless and
+scales to zero between runs.
+
+**This scales roughly linearly** with how often you check and how many accounts you monitor —
+switching to hourly checks or adding a second AWS account both roughly multiply the Bedrock cost
+accordingly, but you're still talking single-digit dollars for a small-to-medium setup.
 
 ## Architecture
 

@@ -29,7 +29,7 @@ TEAMS_WEBHOOK_SECRET_ARN = os.environ.get("TEAMS_WEBHOOK_SECRET_ARN", "")
 TEAMS_ACTIONS_URL = os.environ.get("TEAMS_ACTIONS_URL", "")  # base URL of the magic-link endpoint
 LINK_SIGNING_SECRET_ARN = os.environ.get("SLACK_SIGNING_SECRET_ARN", "")  # reused to sign Teams magic links
 
-secrets = boto3.client("secretsmanager")
+secrets = boto3.client("secretsmanager", region_name=os.environ.get("AWS_REGION", "us-east-1"))
 _secret_cache = {}
 
 
