@@ -1,5 +1,5 @@
 """
-Handles the /awsmanager slash command - lets a small allowlist of people type
+Handles the /aws slash command - lets a small allowlist of people type
 commands like "stop-ec2 i-0123456789" directly. Reuses the exact same
 DynamoDB proposal + Approve/Reject button flow as agent-proposed actions
 (slack_interactions.py handles the click either way) - this file's only job
@@ -71,7 +71,7 @@ COMMAND_MAP = {
 }
 
 HELP_TEXT = (
-    "Usage: `/awsmanager <command> <args>`\n"
+    "Usage: `/aws <command> <args>`\n"
     "Status: `digest` or `status` — pull a full AWS check-in into Slack now\n"
     "Actions: `start-rds <id>`, `stop-rds <id>`, `start-ec2 <id>`, `stop-ec2 <id>`, "
     "`invalidate-cdn <distribution_id> <comma,separated,paths>`\n"

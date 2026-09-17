@@ -38,7 +38,7 @@ This is the part that actually matters, so it's not an afterthought:
   even if the model tried.
 - **The agent never proposes turning something back on.** If you stop a resource intentionally
   (during a break, off-hours, whatever), it's never auto-flagged as a problem and never
-  auto-restarted. Starting something back up only happens via your own explicit `/aws-ops`
+  auto-restarted. Starting something back up only happens via your own explicit `/aws`
   command.
 - Every action — proposed, approved, rejected, executed, or failed — is logged to DynamoDB with
   a full audit trail.
@@ -80,7 +80,7 @@ stores your Slack secrets, and runs `sam build && sam deploy`. You don't hand-ed
 ### Notification channels
 
 Choose Slack, Microsoft Teams, or both — the wizard asks. **A Slack app is always required**
-even for a Teams-only setup, since it's what signs the `/aws-ops` command requests and the
+even for a Teams-only setup, since it's what signs the `/aws` command requests and the
 Teams approval links. You don't need to set up Slack's Incoming Webhook feature if you're not
 using Slack for the digest itself, just the app's Signing Secret.
 
@@ -114,7 +114,7 @@ click, done. Teams doesn't have an equivalent without registering a full Bot Fra
 which is a materially bigger undertaking than a webhook (Azure AD registration, bot hosting, a
 Teams app manifest). So Teams approvals use **one-click signed magic links** instead — an
 Adaptive Card button that opens a URL, verifies a signature, executes the action, and shows a
-confirmation page. Same one click for you; different mechanism under the hood. The `/aws-ops`
+confirmation page. Same one click for you; different mechanism under the hood. The `/aws`
 slash command is Slack-only for the same reason — full Teams commands need that same bot
 registration.
 
@@ -123,13 +123,13 @@ registration.
 Once deployed, anyone on the allowlist can type in Slack:
 
 ```
-/aws-ops digest                              — pull a full check-in right now, don't wait for the schedule
-/aws-ops status                              — same as digest
-/aws-ops start-rds <instance-id>
-/aws-ops stop-rds <instance-id>
-/aws-ops start-ec2 <instance-id>
-/aws-ops stop-ec2 <instance-id>
-/aws-ops invalidate-cdn <distribution-id> <path1,path2,...>
+/aws digest                              — pull a full check-in right now, don't wait for the schedule
+/aws status                              — same as digest
+/aws start-rds <instance-id>
+/aws stop-rds <instance-id>
+/aws start-ec2 <instance-id>
+/aws stop-ec2 <instance-id>
+/aws invalidate-cdn <distribution-id> <path1,path2,...>
 ```
 
 That's the complete list — same whitelist as the automated tiers, nothing broader. Every
